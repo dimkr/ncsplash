@@ -1,0 +1,4 @@
+ncsplash is a simple ncurses-based splash screen which reads strings from a FIFO
+and prints them to the screen, one at a time.
+
+ncsplash is distributed under the GPLv3 license; see COPYING for more details.

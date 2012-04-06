@@ -1,0 +1,18 @@
+.TH ncsplash 1 "6th April 2012" "0.1" "ncsplash 0.1"
+.SH NAME
+ncsplash \- simple ncurses\-based splash screen
+.SH SYNOPSIS
+ncsplash FIFO
+.SH DESCRIPTION
+.B ncsplash
+is a simple ncurses-based splash screen which reads strings from a FIFO and prints them to the screen, one at a time.
+.SH OPTIONS
+.B ncsplash
+does not have any run-time options; however, the text position can be configured at build-time.
+.SH SEE ALSO
+mkfifo(1)
+.SH BUGS
+.B ncsplash
+has no known bugs.
+.SH AUTHOR
+Dima Krasner (dima@dimakrasner.com)
