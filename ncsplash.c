@@ -77,6 +77,9 @@ static coordinate_t status_position = {0, 0};
 /* the logo text */
 static char *logo = NULL;
 
+/* the logo text length */
+static size_t logo_length = 0;
+
 /* the logo text position */
 static coordinate_t logo_position = {0, 0};
 
@@ -137,49 +140,74 @@ bool draw_text(const coordinate_t *position, const char *text) {
 		return FALSE;
 	}
 
-	/* flush the drawing request */
-	if (ERR == refresh()) {
-		m_print("Error: failed to flush the drawing request.\n", NULL);
-		return FALSE;
-	}
-
 	return TRUE;
 }
 
-/* init_screen (WINDOW *)
- * initializes the screen and returns its dimensions
- * input: a coordinate_t structure
- * output: a valid WINDOW pointer on success or NULL on failure */
-WINDOW *init_screen(coordinate_t *dimensions) {
-	/* the return value */
-	WINDOW *window = NULL;
+/* init_screen (bool)
+ * initializes the screen, sets the text position and returns its dimensions
+ * input: -
+ * output: TRUE on success, otherwise FALSE */
+bool init_screen() {
+	/* the screen dimensions */
+	coordinate_t dimensions = {0, 0};
 
 	/* initialize the screen */
 	if (NULL == (window = initscr())) {
 		m_print("Error: failed to initialize the screen.\n", NULL);
-		return NULL;
+		return FALSE;
 	}
 
 	/* disable echoing */
 	if (OK != noecho()) {
 		m_print("Error: failed to disable screen echo.\n", NULL);
-		return NULL;
+		return FALSE;
 	}
 
 	/* make the cursor invisible */
 	if (ERR == curs_set(0)) {
 		m_print("Error: failed to make the cursor invisible.\n", NULL);
-		return NULL;
+		return FALSE;
 	}
 
 	/* initscr() makes the first refresh() clear the screen - do this now */
-	if (ERR == refresh())
+	if (ERR == refresh()) {
 		m_print("Error: failed to clear the screen.\n", NULL);
+		return FALSE;
+	}
 
 	/* get the screen dimensions */
-	getmaxyx(window, dimensions->y, dimensions->x);
+	getmaxyx(window, dimensions.y, dimensions.x);
 
-	return window;
+	/* set the status text position */
+	status_position.x = CONFIG_TEXT_X;
+	status_position.y = dimensions.y - CONFIG_TEXT_Y;
+
+	/* set the logo text position */
+	if (NULL != logo) {
+		logo_position.x = (dimensions.x - logo_length) / 2;
+		logo_position.y = dimensions.y / 2;
+	}
+
+	return TRUE;
+}
+
+/* close_screen (bool)
+ * closes a screen previously initialized using init_screen()
+ * input: -
+ * output: TRUE on success, otherwise FALSE */
+bool close_screen() {
+	/* make sure the screen was indeed initialized */
+	if (NULL == window)
+		return FALSE;
+
+	/* close the screen */
+	if (OK != endwin())
+		return FALSE;
+
+	/* reset the WINDOW pointer */
+	window = NULL;
+
+	return TRUE;
 }
 
 /******************
@@ -196,8 +224,7 @@ void clean_up() {
 		(void) close(fifo);
 
 	/* close the screen */
-	if (NULL != window)
-		(void) endwin();
+	(void) close_screen();
 }
 
 /* handle_data (bool)
@@ -207,6 +234,9 @@ void clean_up() {
 bool handle_data() {
 	/* the reading buffer */
 	char buffer[BUFFER_SIZE] = {0};
+
+	/* a boolean value which determines whether the logo is underlined */
+	bool is_underlined = FALSE;
 
 	/* read from the FIFO */
 	if (-1 == read(fifo, &buffer, BUFFER_SIZE))
@@ -224,8 +254,26 @@ bool handle_data() {
 		exit(EXIT_CODE_ERROR_DRAW);
 	}
 
+	/* attempt to make the logo text underlined */
+	if (OK == attron(A_UNDERLINE))
+		is_underlined = TRUE;
+
 	/* draw the logo text, if there is any */
 	if ((NULL != logo) && (FALSE == draw_text(&logo_position, logo))) {
+		clean_up();
+		exit(EXIT_CODE_ERROR_DRAW);
+	}
+
+	/* disable the underlined text attribute */
+	if ((TRUE == is_underlined) && (OK != attroff(A_UNDERLINE))) {
+		m_print("Error: failed to disable a terminal atteribute.\n", NULL);
+		clean_up();
+		exit(EXIT_CODE_ERROR_DRAW);
+	}
+
+	/* flush the drawing requests */
+	if (ERR == refresh()) {
+		m_print("Error: failed to flush the drawing requests.\n", NULL);
 		clean_up();
 		exit(EXIT_CODE_ERROR_DRAW);
 	}
@@ -233,13 +281,35 @@ bool handle_data() {
 	return TRUE;
 }
 
-/* signal_handler (void)
+/* terminal_change_signal_handler (void)
+ * a signal handler for terminal size changes; mainly used to overcome KMS
+ * issues - see https://wiki.archlinux.org/index.php/Kernel_Mode_Setting
+ * output: - */
+void terminal_change_signal_handler(int signal) {
+	/* make sure the right signal was received */
+	if (SIGWINCH != signal)
+		return;
+
+	/* close the current screen */
+	if (FALSE == close_screen()) {
+		clean_up();
+		exit(EXIT_CODE_ERROR_DRAW);
+	}
+
+	/* initialize a new screen, on the new terminal, then clear it */
+	if ((FALSE == init_screen()) || (OK != erase())) {
+		clean_up();
+		exit(EXIT_CODE_ERROR_DRAW);
+	}
+}
+
+/* fifo_signal_handler (void)
  * a signal handler; the FIFO is opened asynchronously, so the process receives
  * SIGIO every time data is written to it - this function is called once this
  * happens and handles the data
  * input: the received signal
  * output: - */
-void signal_handler(int signal) {
+void fifo_signal_handler(int signal) {
 	/* make sure the right signal was received */
 	if (SIGIO != signal)
 		return;
@@ -247,6 +317,7 @@ void signal_handler(int signal) {
 	/* read the data and print it */
 	if (FALSE == handle_data()) {
 		m_print("Error: failed to read from the FIFO.\n", NULL);
+		clean_up();
 		exit(EXIT_CODE_ERROR_FIFO);
 	}
 }
@@ -259,17 +330,14 @@ int main(int argc, char *argv[]) {
 	/* the return value */
 	int ret = EXIT_FAILURE;
 
-	/* the screen dimensions */
-	coordinate_t screen_dimensions = {0, 0};
+	/* the FIFO SIGIO signal action */
+	struct sigaction fifo_signal_action = {{0}};
 
-	/* the SIGIO signal action */
-	struct sigaction signal_action = {{0}};
+	/* the terminal change signal action */
+	struct sigaction terminal_change_signal_action = {{0}};
 
 	/* the flags the FIFO was opened with */
 	int flags = 0;
-
-	/* the logo text length */
-	size_t logo_length = 0;
 
 	/* check the command-line */
 	switch (argc) {
@@ -288,16 +356,17 @@ int main(int argc, char *argv[]) {
 			goto end;
 	}
 
-	/* initialize the signal action structure */
-	signal_action.sa_handler = signal_handler;
+	/* initialize the FIFO I/O signal action structure */
+	fifo_signal_action.sa_handler = fifo_signal_handler;
 
 	/* do not drop signals received while the signal handler is called - this
 	 * way, some data written to the FIFO is lost */
-	signal_action.sa_flags = SA_NODEFER;
+	fifo_signal_action.sa_flags = SA_NODEFER;
 
-	/* register the signal handler */
-	if (0 != sigaction(SIGIO, &signal_action, NULL)) {
-		m_print("Error: failed to register the signal handler.\n", NULL);
+	/* register the FIFO signal handler */
+	if (0 != sigaction(SIGIO, &fifo_signal_action, NULL)) {
+		m_print("Error: failed to register the FIFO I/O signal handler.\n",
+		        NULL);
 		ret = EXIT_CODE_ERROR_SIGHANDLER;
 		goto end;
 	}
@@ -310,15 +379,16 @@ int main(int argc, char *argv[]) {
 		goto end;
 	}
 
-	/* initialize the screen */
-	if (NULL == (window = init_screen(&screen_dimensions))) {
-		ret = EXIT_CODE_ERROR_DRAW;
+	/* initialize the terminal change signal action structure */
+	terminal_change_signal_action.sa_handler = terminal_change_signal_handler;
+
+	/* register the terminal signal handler */
+	if (0 != sigaction(SIGWINCH, &terminal_change_signal_action, NULL)) {
+		m_print("Error: failed to register the terminal change signal handler" \
+		        ".\n", NULL);
+		ret = EXIT_CODE_ERROR_SIGHANDLER;
 		goto end;
 	}
-
-	/* set the status text position */
-	status_position.x = CONFIG_TEXT_X;
-	status_position.y = screen_dimensions.y - CONFIG_TEXT_Y;
 
 	/* prepare the logo text */
 	if ((MAX_VALID_ARGC == argc) && ('\0' != *argv[2])) {
@@ -327,10 +397,12 @@ int main(int argc, char *argv[]) {
 
 		/* calculate the logo text length */
 		logo_length = strnlen(argv[2], BUFFER_SIZE);
+	}
 
-		/* set the logo text position */
-		logo_position.x = (screen_dimensions.x - logo_length) / 2;
-		logo_position.y = screen_dimensions.y / 2;
+	/* initialize the screen */
+	if (FALSE == init_screen()) {
+		ret = EXIT_CODE_ERROR_DRAW;
+		goto end;
 	}
 
 	/* get the process ID */
