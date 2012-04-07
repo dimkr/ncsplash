@@ -1,6 +1,6 @@
 # compiler stuff
 CC ?= cc
-CFLAGS ?=
+CFLAGS ?= -Wall
 LIBS = -lncurses
 
 # installation stuff

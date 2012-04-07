@@ -45,7 +45,8 @@ enum exit_codes {
 	EXIT_CODE_SUCCESS,
 	EXIT_CODE_BAD_USAGE,
 	EXIT_CODE_ERROR_SIGHANDLER,
-	EXIT_CODE_ERROR_FIFO
+	EXIT_CODE_ERROR_FIFO,
+	EXIT_CODE_ERROR_DRAW
 };
 
 /* the valid number of command-line arguments */
@@ -77,9 +78,6 @@ static WINDOW *window = NULL;
 
 /* the process ID */
 static pid_t pid = 0;
-
-/* a boolean which indicates whether this is the first string drawn */
-bool is_first = TRUE;
 
 /*********************
  * utility functions *
@@ -126,8 +124,18 @@ void m_print(const char *str, ...) {
  * input: a string to print and its position on the screen
  * output: TRUE on success, otherwise FALSE */
 bool draw_text(const coordinate_t *position, const char *text) {
-	if (ERR == mvprintw(position->y, position->x, text))
+	/* send the drawing request */
+	if (ERR == mvprintw(position->y, position->x, text)) {
+		m_print("Error: failed to draw text on the screen.\n", NULL);
 		return FALSE;
+	}
+
+	/* flush the drawing request */
+	if (ERR == refresh()) {
+		m_print("Error: failed to flush the drawing request.\n", NULL);
+		return FALSE;
+	}
+
 	return TRUE;
 }
 
@@ -185,25 +193,17 @@ void clean_up() {
 		(void) endwin();
 }
 
-/* signal_handler (void)
- * a signal handler; the FIFO is opened asynchronously, so the process receives
- * SIGIO every time data is written to it - this function is called once this
- * happens and handles the data
- * input: the received signal
- * output: - */
-void signal_handler(int signal) {
+/* handle_data (bool)
+ * reads data from the FIFO and prints it
+ * input: -
+ * output: TRUE on success, otherwise FALSE */
+bool handle_data() {
 	/* the reading buffer */
 	char buffer[BUFFER_SIZE] = {0};
 
-	/* make sure the right signal was received */
-	if (SIGIO != signal)
-		return;
-
 	/* read from the FIFO */
-	if (-1 == read(fifo, &buffer, BUFFER_SIZE)) {
-		m_print("Error: failed to read from the FIFO.\n", NULL);
-		return;
-	}
+	if (-1 == read(fifo, &buffer, BUFFER_SIZE))
+		return FALSE;
 
 	/* if the exit text was received, terminate the process */
 	if (0 == strncmp(buffer, EXIT_TEXT, sizeof(EXIT_TEXT) - 1)) {
@@ -211,25 +211,31 @@ void signal_handler(int signal) {
 		exit(EXIT_CODE_SUCCESS);
 	}
 
-	/* clear the screen; if it's the first drawing, this will prevent the
-	 * drawing of the first string, so skip it once */
-	if (TRUE == is_first) {
-		if (ERR == erase()) {
-			m_print("Error: failed to clear the screen.\n");
-			return;
-		}
-		is_first = FALSE;
-	}
-
-	/* draw the read text */
+	/* draw the read text; terminate upon failure */
 	if (FALSE == draw_text(&position, buffer)) {
-		m_print("Error: failed to draw the text.\n", NULL);
-		return;
+		clean_up();
+		exit(EXIT_CODE_ERROR_DRAW);
 	}
 
-	/* flush the drawing request */
-	if (ERR == refresh())
-		m_print("Error: failed to flush the drawing request.\n", NULL);
+	return TRUE;
+}
+
+/* signal_handler (void)
+ * a signal handler; the FIFO is opened asynchronously, so the process receives
+ * SIGIO every time data is written to it - this function is called once this
+ * happens and handles the data
+ * input: the received signal
+ * output: - */
+void signal_handler(int signal) {
+	/* make sure the right signal was received */
+	if (SIGIO != signal)
+		return;
+
+	/* read the data and print it */
+	if (FALSE == handle_data()) {
+		m_print("Error: failed to read from the FIFO.\n", NULL);
+		exit(EXIT_CODE_ERROR_FIFO);
+	}
 }
 
 /* main (main)
@@ -279,6 +285,16 @@ int main(int argc, char *argv[]) {
 		goto end;
 	}
 
+	/* initialize the screen */
+	if (NULL == (window = init_screen(&screen_dimensions))) {
+		ret = EXIT_CODE_ERROR_DRAW;
+		goto end;
+	}
+
+	/* set the text position */
+	position.x = CONFIG_TEXT_X;
+	position.y = screen_dimensions.y - CONFIG_TEXT_Y;
+
 	/* get the process ID */
 	pid = getpid();
 
@@ -292,13 +308,9 @@ int main(int argc, char *argv[]) {
 		goto end;
 	}
 
-	/* initialize the screen */
-	if (NULL == (window = init_screen(&screen_dimensions)))
-		goto end;
-
-	/* set the text position */
-	position.x = CONFIG_TEXT_X;
-	position.y = screen_dimensions.y - CONFIG_TEXT_Y;
+	/* read from the FIFO once and handle any data written before the process
+	 * was created - this may fail if there is no data */
+	(void) handle_data();
 
 	/* run an infinite loop; once EXIT_TEXT is received, the signal handler
 	 * terminates the process */
