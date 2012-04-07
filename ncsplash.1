@@ -1,11 +1,13 @@
-.TH ncsplash 1 "6th April 2012" "0.1" "ncsplash 0.1"
+.TH ncsplash 1 "7th April 2012" "0.1" "ncsplash 0.1"
 .SH NAME
 ncsplash \- simple ncurses\-based splash screen
 .SH SYNOPSIS
-ncsplash FIFO
+ncsplash FIFO [LOGO]
 .SH DESCRIPTION
 .B ncsplash
 is a simple ncurses-based splash screen which reads strings from a FIFO and prints them to the screen, one at a time.
+
+Additionally, optional logo text may be drawn in the middle of the screen.
 .SH OPTIONS
 .B ncsplash
 does not have any run-time options; however, the text position can be configured at build-time.

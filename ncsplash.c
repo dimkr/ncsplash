@@ -49,13 +49,14 @@ enum exit_codes {
 	EXIT_CODE_ERROR_DRAW
 };
 
-/* the valid number of command-line arguments */
-#define VALID_ARGC (2)
+/* the minimum and maximum valid numbers of command-line arguments */
+#define MIN_VALID_ARGC (2)
+#define MAX_VALID_ARGC (3)
 
 /* the usage message */
-#define USAGE_MESSAGE "ncsplash FIFO\n\nA simple ncurses-based splash screen " \
-                      "which reads strings from a FIFO and prints them to the" \
-                      " screen, one at a time.\n"
+#define USAGE_MESSAGE "ncsplash FIFO [LOGO]\n\nA simple ncurses-based splash " \
+                      "screen which reads strings from a FIFO and prints " \
+                      "them to the screen, one at a time.\n"
 
 /* the output file descriptor for messages */
 #define OUTPUT_FD STDOUT_FILENO
@@ -70,8 +71,14 @@ enum exit_codes {
 /* the FIFO file descriptor */
 static int fifo = 0;
 
-/* the text position */
-static coordinate_t position = {0, 0};
+/* the status text position */
+static coordinate_t status_position = {0, 0};
+
+/* the logo text */
+static char *logo = NULL;
+
+/* the logo text position */
+static coordinate_t logo_position = {0, 0};
 
 /* the window */
 static WINDOW *window = NULL;
@@ -212,7 +219,13 @@ bool handle_data() {
 	}
 
 	/* draw the read text; terminate upon failure */
-	if (FALSE == draw_text(&position, buffer)) {
+	if (FALSE == draw_text(&status_position, buffer)) {
+		clean_up();
+		exit(EXIT_CODE_ERROR_DRAW);
+	}
+
+	/* draw the logo text, if there is any */
+	if ((NULL != logo) && (FALSE == draw_text(&logo_position, logo))) {
 		clean_up();
 		exit(EXIT_CODE_ERROR_DRAW);
 	}
@@ -255,12 +268,24 @@ int main(int argc, char *argv[]) {
 	/* the flags the FIFO was opened with */
 	int flags = 0;
 
+	/* the logo text length */
+	size_t logo_length = 0;
+
 	/* check the command-line */
-	if ((VALID_ARGC != argc) ||
-	    ((VALID_ARGC == argc) && ('\0' == *argv[1]))) {
-		m_print(USAGE_MESSAGE, NULL);
-		ret = EXIT_CODE_BAD_USAGE;
-		goto end;
+	switch (argc) {
+		/* if a valid number of command-line arguments was passed, make sure
+		 * the first argument (the FIFO path) isn't an empty string */
+		case MIN_VALID_ARGC:
+		case MAX_VALID_ARGC:
+			if ('\0' != *argv[1])
+				break;
+
+		/* if an invalid numer of command-line arguments was passed, show the
+		 * usage message and exit */
+		default:
+			m_print(USAGE_MESSAGE, NULL);
+			ret = EXIT_CODE_BAD_USAGE;
+			goto end;
 	}
 
 	/* initialize the signal action structure */
@@ -291,9 +316,22 @@ int main(int argc, char *argv[]) {
 		goto end;
 	}
 
-	/* set the text position */
-	position.x = CONFIG_TEXT_X;
-	position.y = screen_dimensions.y - CONFIG_TEXT_Y;
+	/* set the status text position */
+	status_position.x = CONFIG_TEXT_X;
+	status_position.y = screen_dimensions.y - CONFIG_TEXT_Y;
+
+	/* prepare the logo text */
+	if ((MAX_VALID_ARGC == argc) && ('\0' != *argv[2])) {
+		/* set the logo text pointer */
+		logo = argv[2];
+
+		/* calculate the logo text length */
+		logo_length = strnlen(argv[2], BUFFER_SIZE);
+
+		/* set the logo text position */
+		logo_position.x = (screen_dimensions.x - logo_length) / 2;
+		logo_position.y = screen_dimensions.y / 2;
+	}
 
 	/* get the process ID */
 	pid = getpid();
