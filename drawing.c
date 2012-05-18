@@ -102,7 +102,7 @@ end:
 	return ret;
 }
 
-bool drawing_clear(drawing_t *drawing, const int y) {
+bool drawing_clear(drawing_t *drawing) {
 	/* the return value */
 	bool ret = FALSE;
 
