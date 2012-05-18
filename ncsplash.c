@@ -424,7 +424,8 @@ int main(int argc, char *argv[]) {
 
 	/* run an infinite loop; once EXIT_TEXT is received, the signal handler
 	 * terminates the process */
-	for (; ;) {};
+	for (; ; )
+		(void) pause();
 
 	/* report success */
 	ret = EXIT_CODE_SUCCESS;
