@@ -12,7 +12,7 @@ mkfifo $fifo
 # input: a message
 # output: -
 update_status() {
-	echo "$@" >> $fifo
+	echo -n "$@" >> $fifo
 	sleep $DELAY
 }
 
@@ -30,7 +30,7 @@ actual_code() {
 	update_status "Starting desktop environment"
 
 	# signal ncsplash to terminate
-	echo "exit" >> $fifo
+	echo -n "exit" >> $fifo
 }
 
 # run the actual code and redirect any output; the first writing to the FIFO
@@ -38,7 +38,7 @@ actual_code() {
 actual_code > /dev/null 2>&1 &
 
 # run ncsplash; it will block the shell until EXIT_TEXT is received
-ncsplash $fifo "Starting Ultimate Operating System 1.0 Beta ..."
+./ncsplash $fifo "Starting Ultimate Operating System 1.0 Beta ..."
 
 # delete the FIFO
 rm -f $fifo

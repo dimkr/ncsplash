@@ -12,7 +12,7 @@ DOC_DIR ?= $(PREFIX)/share/doc
 %.o: %.c
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-ncsplash: ncsplash.o
+ncsplash: drawing.o ncsplash.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
 
 clean:

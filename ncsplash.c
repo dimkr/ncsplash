@@ -19,391 +19,109 @@
  */
 
 #include <stdlib.h>
-#include <string.h>
+#include <signal.h> /* for signal handling stuff */
+#include <unistd.h> /* for pause() */
 #include <sys/stat.h> /* for I/O stuff */
 #include <fcntl.h>
-#include <unistd.h>
-#include <signal.h> /* for signal handling */
-#include <curses.h>
-#include "config.h"
+#include <string.h> /* for strncmp() */
+#include "drawing.h" /* for the drawing backend */
+#include "config.h" /* for the configuration */
 
 /*****************************
  * constants and definitions *
  *****************************/
 
-/* coordinates; an object identified by two integers */
-typedef struct {
-	int x;
-	int y;
-} coordinate_t;
+/* the valid number of command-line arguments */
+#define VALID_ARGC (3)
+
+/* the usage message */
+#define USAGE_MESSAGE "ncsplash FIFO LOGO\n\nA simple ncurses-based splash " \
+                      "screen which reads strings from a FIFO and prints " \
+                      "them to the screen, one at a time.\n"
 
 /* the text written to the FIFO to signal the process to terminate */
 #define EXIT_TEXT "exit"
 
-/* exit codes */
-enum exit_codes {
-	EXIT_CODE_SUCCESS,
-	EXIT_CODE_BAD_USAGE,
-	EXIT_CODE_ERROR_SIGHANDLER,
-	EXIT_CODE_ERROR_FIFO,
-	EXIT_CODE_ERROR_DRAW
-};
-
-/* the minimum and maximum valid numbers of command-line arguments */
-#define MIN_VALID_ARGC (2)
-#define MAX_VALID_ARGC (3)
-
-/* the usage message */
-#define USAGE_MESSAGE "ncsplash FIFO [LOGO]\n\nA simple ncurses-based splash " \
-                      "screen which reads strings from a FIFO and prints " \
-                      "them to the screen, one at a time.\n"
-
-/* the output file descriptor for messages */
-#define OUTPUT_FD STDOUT_FILENO
-
 /* the I/O buffer size */
 #define BUFFER_SIZE (512)
 
-/***********
- * globals *
- ***********/
+/* string length */
+#define STRLEN(x) (sizeof(x) - 1)
 
-/* the FIFO file descriptor */
-static int fifo = 0;
-
-/* the status text position */
-static coordinate_t status_position = {0, 0};
-
-/* the logo text */
-static char *logo = NULL;
-
-/* the logo text length */
-static size_t logo_length = 0;
-
-/* the logo text position */
-static coordinate_t logo_position = {0, 0};
-
-/* the window */
-static WINDOW *window = NULL;
-
-/* the process ID */
-static pid_t pid = 0;
-
-/*********************
- * utility functions *
- *********************/
-
- /* m_print (void)
- * prints a variable number of strings
- * input: strings, terminated by a NULL parameter
- * output: - */
-void m_print(const char *str, ...) {
-	/* the strings to print */
-	va_list strings = {{'\0'}};
-
-	/* the current string */
-	const char *string = NULL;
-
-	/* the length of each parameter */
-	size_t length = 0;
-
-	/* initialize the list of strings */
-	va_start(strings, str);
-
-	/* write all strings to standard output */
-	for (string = str; NULL != string; string = va_arg(strings, const char *))
-	{
-		/* calculate the length of each parameter */
-		length = 1 + strnlen(string, BUFFER_SIZE);
-
-		/* output the string; upon failure, break the loop */
-		if (length != write(OUTPUT_FD, string, length))
-			break;
-	}
-
-	/* free the strings list */
-	va_end(strings);
-}
-
-/*********************
- * drawing functions *
- *********************/
-
-/* draw_text (bool)
- * prints a given string on the screen
- * input: a string to print and its position on the screen
- * output: TRUE on success, otherwise FALSE */
-bool draw_text(const coordinate_t *position, const char *text) {
-	/* send the drawing request */
-	if (ERR == mvprintw(position->y, position->x, text)) {
-		m_print("Error: failed to draw text on the screen.\n", NULL);
-		return FALSE;
-	}
-
-	return TRUE;
-}
-
-/* init_screen (bool)
- * initializes the screen, sets the text position and returns its dimensions
- * input: -
- * output: TRUE on success, otherwise FALSE */
-bool init_screen() {
-	/* the screen dimensions */
-	coordinate_t dimensions = {0, 0};
-
-	/* initialize the screen */
-	if (NULL == (window = initscr())) {
-		m_print("Error: failed to initialize the screen.\n", NULL);
-		return FALSE;
-	}
-
-	/* disable echoing */
-	if (OK != noecho()) {
-		m_print("Error: failed to disable screen echo.\n", NULL);
-		return FALSE;
-	}
-
-	/* make the cursor invisible */
-	if (ERR == curs_set(0)) {
-		m_print("Error: failed to make the cursor invisible.\n", NULL);
-		return FALSE;
-	}
-
-	/* initscr() makes the first refresh() clear the screen - do this now */
-	if (ERR == refresh()) {
-		m_print("Error: failed to clear the screen.\n", NULL);
-		return FALSE;
-	}
-
-	/* get the screen dimensions */
-	getmaxyx(window, dimensions.y, dimensions.x);
-
-	/* set the status text position */
-	status_position.x = CONFIG_TEXT_X;
-	status_position.y = dimensions.y - CONFIG_TEXT_Y;
-
-	/* set the logo text position */
-	if (NULL != logo) {
-		logo_position.x = (dimensions.x - logo_length) / 2;
-		logo_position.y = dimensions.y / 2;
-	}
-
-	return TRUE;
-}
-
-/* close_screen (bool)
- * closes a screen previously initialized using init_screen()
- * input: -
- * output: TRUE on success, otherwise FALSE */
-bool close_screen() {
-	/* make sure the screen was indeed initialized */
-	if (NULL == window)
-		return FALSE;
-
-	/* close the screen */
-	if (OK != endwin())
-		return FALSE;
-
-	/* reset the WINDOW pointer */
-	window = NULL;
-
-	return TRUE;
-}
+/* the maximum length of the logo text */
+#define MAX_LOGO_LENGTH (128)
 
 /******************
  * implementation *
  ******************/
 
-/* clean_up (void)
- * performs clean up operations
- * input: -
- * output: - */
-void clean_up() {
-	/* close the FIFO */
-	if (-1 != fifo)
-		(void) close(fifo);
+/* the singal received */
+int received_signal = 0;
 
-	/* close the screen */
-	(void) close_screen();
+void signal_handler(int sig) {
+	/* save the received signal */
+	received_signal = sig;
 }
 
-/* handle_data (bool)
- * reads data from the FIFO and prints it
- * input: -
- * output: TRUE on success, otherwise FALSE */
-bool handle_data() {
-	/* the reading buffer */
-	char buffer[BUFFER_SIZE] = {0};
-
-	/* a boolean value which determines whether the logo is underlined */
-	bool is_underlined = FALSE;
-
-	/* read from the FIFO */
-	if (-1 == read(fifo, &buffer, BUFFER_SIZE))
-		return FALSE;
-
-	/* if the exit text was received, terminate the process */
-	if (0 == strncmp(buffer, EXIT_TEXT, sizeof(EXIT_TEXT) - 1)) {
-		clean_up();
-		exit(EXIT_CODE_SUCCESS);
-	}
-
-	/* draw the read text; terminate upon failure */
-	if (FALSE == draw_text(&status_position, buffer)) {
-		clean_up();
-		exit(EXIT_CODE_ERROR_DRAW);
-	}
-
-	/* attempt to make the logo text underlined */
-	if (OK == attron(A_UNDERLINE))
-		is_underlined = TRUE;
-
-	/* draw the logo text, if there is any */
-	if ((NULL != logo) && (FALSE == draw_text(&logo_position, logo))) {
-		clean_up();
-		exit(EXIT_CODE_ERROR_DRAW);
-	}
-
-	/* disable the underlined text attribute */
-	if ((TRUE == is_underlined) && (OK != attroff(A_UNDERLINE))) {
-		m_print("Error: failed to disable a terminal atteribute.\n", NULL);
-		clean_up();
-		exit(EXIT_CODE_ERROR_DRAW);
-	}
-
-	/* flush the drawing requests */
-	if (ERR == refresh()) {
-		m_print("Error: failed to flush the drawing requests.\n", NULL);
-		clean_up();
-		exit(EXIT_CODE_ERROR_DRAW);
-	}
-
-	return TRUE;
-}
-
-/* terminal_change_signal_handler (void)
- * a signal handler for terminal size changes; mainly used to overcome KMS
- * issues - see https://wiki.archlinux.org/index.php/Kernel_Mode_Setting
- * output: - */
-void terminal_change_signal_handler(int signal) {
-	/* make sure the right signal was received */
-	if (SIGWINCH != signal)
-		return;
-
-	/* close the current screen */
-	if (FALSE == close_screen()) {
-		clean_up();
-		exit(EXIT_CODE_ERROR_DRAW);
-	}
-
-	/* initialize a new screen, on the new terminal, then clear it */
-	if ((FALSE == init_screen()) || (OK != erase())) {
-		clean_up();
-		exit(EXIT_CODE_ERROR_DRAW);
-	}
-}
-
-/* fifo_signal_handler (void)
- * a signal handler; the FIFO is opened asynchronously, so the process receives
- * SIGIO every time data is written to it - this function is called once this
- * happens and handles the data
- * input: the received signal
- * output: - */
-void fifo_signal_handler(int signal) {
-	/* make sure the right signal was received */
-	if (SIGIO != signal)
-		return;
-
-	/* read the data and print it */
-	if (FALSE == handle_data()) {
-		m_print("Error: failed to read from the FIFO.\n", NULL);
-		clean_up();
-		exit(EXIT_CODE_ERROR_FIFO);
-	}
-}
-
-/* main (main)
- * the entry point
- * input: the command-line arguments and their count
- * output: an exit_codes member */
 int main(int argc, char *argv[]) {
 	/* the return value */
 	int ret = EXIT_FAILURE;
 
-	/* the FIFO SIGIO signal action */
-	struct sigaction fifo_signal_action = {{0}};
-
-	/* the terminal change signal action */
-	struct sigaction terminal_change_signal_action = {{0}};
+	/* the FIFO file descriptor */
+	int fifo = 0;
 
 	/* the flags the FIFO was opened with */
 	int flags = 0;
 
-	/* check the command-line */
-	switch (argc) {
-		/* if a valid number of command-line arguments was passed, make sure
-		 * the first argument (the FIFO path) isn't an empty string */
-		case MIN_VALID_ARGC:
-		case MAX_VALID_ARGC:
-			if ('\0' != *argv[1])
-				break;
+	/* the reading buffer */
+	char buffer[BUFFER_SIZE] = {0};
 
-		/* if an invalid numer of command-line arguments was passed, show the
-		 * usage message and exit */
-		default:
-			m_print(USAGE_MESSAGE, NULL);
-			ret = EXIT_CODE_BAD_USAGE;
-			goto end;
+	/* the number of bytes read from the FIFO */
+	ssize_t read_bytes = 0;
+
+	/* the signal action */
+	struct sigaction signal_action = {{0}};
+
+	/* the process ID */
+	static pid_t pid = 0;
+
+	/* the drawing area */
+	drawing_t drawing = {0};
+
+	/* the drawing position for the status lines */
+	position_t status_position = {CONFIG_TEXT_X, 0};
+
+	/* the drawing position for the logo text */
+	position_t logo_position = {0, 0};
+
+	/* a boolean which indicates whether this is the first read */
+	bool is_first = TRUE;
+
+	/* if an invalid number of command-line arguments was passed,  show the
+	 * usage message and exit */
+	if (VALID_ARGC != argc) {
+		(void) write(STDOUT_FILENO, USAGE_MESSAGE, sizeof(USAGE_MESSAGE));
+		goto end;
 	}
 
-	/* initialize the FIFO I/O signal action structure */
-	fifo_signal_action.sa_handler = fifo_signal_handler;
+	/* open the FIFO in non-blocking mode */
+	if (-1 == (fifo = open(argv[1], O_RDONLY | O_NONBLOCK)))
+		goto end;
+
+	/* initialize the drawing area */
+	if (FALSE == drawing_new(&drawing))
+		goto end;
+
+	/* initialize the signal action structure */
+	signal_action.sa_handler = signal_handler;
 
 	/* do not drop signals received while the signal handler is called - this
 	 * way, some data written to the FIFO is lost */
-	fifo_signal_action.sa_flags = SA_NODEFER;
+	signal_action.sa_flags = SA_NODEFER;
 
-	/* register the FIFO signal handler */
-	if (0 != sigaction(SIGIO, &fifo_signal_action, NULL)) {
-		m_print("Error: failed to register the FIFO I/O signal handler.\n",
-		        NULL);
-		ret = EXIT_CODE_ERROR_SIGHANDLER;
+	/* register the signal handler */
+	if (0 != sigaction(SIGIO, &signal_action, NULL))
 		goto end;
-	}
-
-	/* open the FIFO in asynchronous mode, so the process gets notified of
-	 * written data through the SIGIO signal */
-	if (-1 == (fifo = open(argv[1], O_RDONLY | O_NONBLOCK))) {
-		m_print("Error: failed to open the FIFO.\n", NULL);
-		ret = EXIT_CODE_ERROR_FIFO;
-		goto end;
-	}
-
-	/* initialize the terminal change signal action structure */
-	terminal_change_signal_action.sa_handler = terminal_change_signal_handler;
-
-	/* register the terminal signal handler */
-	if (0 != sigaction(SIGWINCH, &terminal_change_signal_action, NULL)) {
-		m_print("Error: failed to register the terminal change signal handler" \
-		        ".\n", NULL);
-		ret = EXIT_CODE_ERROR_SIGHANDLER;
-		goto end;
-	}
-
-	/* prepare the logo text */
-	if ((MAX_VALID_ARGC == argc) && ('\0' != *argv[2])) {
-		/* set the logo text pointer */
-		logo = argv[2];
-
-		/* calculate the logo text length */
-		logo_length = strnlen(argv[2], BUFFER_SIZE);
-	}
-
-	/* initialize the screen */
-	if (FALSE == init_screen()) {
-		ret = EXIT_CODE_ERROR_DRAW;
-		goto end;
-	}
 
 	/* get the process ID */
 	pid = getpid();
@@ -412,27 +130,91 @@ int main(int argc, char *argv[]) {
 	 * FIFO and set the asynchronous I/O flag */
 	if ((-1 == fcntl(fifo, F_SETOWN, pid)) ||
 	    (-1 == (flags = fcntl(fifo, F_GETFL))) ||
-	    (-1 == fcntl(fifo, F_SETFL, flags | O_ASYNC))) {
-		m_print("Error: failed to enable asynchronous I/O with the FIFO.\n");
-		ret = EXIT_CODE_ERROR_FIFO;
+	    (-1 == fcntl(fifo, F_SETFL, flags | O_ASYNC)))
 		goto end;
+
+	/* draw the logo */
+	if ('\0' != *argv[2]) {
+		/* calculate the logo text position */
+		logo_position.x = (drawing.dimensions.width -
+						   strnlen(argv[2], MAX_LOGO_LENGTH)) / 2;
+		logo_position.y = drawing.dimensions.height / 2;
+
+
+		if (FALSE == drawing_draw_text(&drawing, argv[2], &logo_position))
+			goto end;
+
+		/* flush the drawing request */
+		if (FALSE == drawing_refresh(&drawing))
+			goto end;
 	}
 
-	/* read from the FIFO once and handle any data written before the process
-	 * was created - this may fail if there is no data */
-	(void) handle_data();
+	/* set the status text position */
+	status_position.y = drawing.dimensions.height - CONFIG_TEXT_Y;
 
-	/* run an infinite loop; once EXIT_TEXT is received, the signal handler
-	 * terminates the process */
-	for (; ; )
-		(void) pause();
+	/* enter a signal handling loop */
+	do {
+		if (FALSE == is_first) {
+			/* wait for a signal to be received and handled by the signal
+			 * handler */
+			(void) pause();
 
-	/* report success */
-	ret = EXIT_CODE_SUCCESS;
+			/* if the received event is not SIGIO, ignore it */
+			if (SIGIO != received_signal)
+				continue;
+		}
+
+		/* perform one initial read before waiting for signals */
+		is_first = FALSE;
+
+		/* read from the FIFO */
+		if (-1 == (read_bytes = read(fifo, &buffer, (BUFFER_SIZE - 1))))
+			break;
+
+		/* if nothing was read from the FIFO, try again */
+		if (0 == read_bytes)
+			continue;
+
+		/* terminate the read string */
+		buffer[read_bytes] = '\0';
+
+		/* if the exit text was received, break the loop and report success */
+		if (read_bytes == STRLEN(EXIT_TEXT)) {
+			if (0 == strncmp(buffer, EXIT_TEXT, STRLEN(EXIT_TEXT))) {
+				ret = EXIT_SUCCESS;
+				break;
+			}
+		}
+
+		/* clear the drawing */
+		if (FALSE == drawing_clear(&drawing))
+			break;
+
+		/* draw the read text */
+		if (FALSE == drawing_draw_text(&drawing, buffer, &status_position))
+			break;
+
+		/* draw the logo */
+		if ('\0' != *argv[2]) {
+			if (FALSE == drawing_set_underlined(&drawing, TRUE))
+				goto end;
+
+			if (FALSE == drawing_draw_text(&drawing, argv[2], &logo_position))
+				break;
+
+			if (FALSE == drawing_set_underlined(&drawing, FALSE))
+				goto end;
+		}
+
+		/* flush all drawing requests */
+		if (FALSE == drawing_refresh(&drawing))
+			break;
+
+	} while (TRUE);
 
 end:
-	/* clean up */
-	clean_up();
+	/* destroy the drawing area */
+	(void) drawing_destroy(&drawing);
 
 	return ret;
 }
