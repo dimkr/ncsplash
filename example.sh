@@ -38,7 +38,7 @@ actual_code() {
 actual_code > /dev/null 2>&1 &
 
 # run ncsplash; it will block the shell until EXIT_TEXT is received
-./ncsplash $fifo "Starting Ultimate Operating System 1.0 Beta ..."
+ncsplash $fifo "Starting Ultimate Operating System 1.0 Beta ..."
 
 # delete the FIFO
 rm -f $fifo
