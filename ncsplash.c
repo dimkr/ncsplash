@@ -55,14 +55,6 @@
  * implementation *
  ******************/
 
-/* the singal received */
-int received_signal = 0;
-
-void signal_handler(int sig) {
-	/* save the received signal */
-	received_signal = sig;
-}
-
 int main(int argc, char *argv[]) {
 	/* the return value */
 	int ret = EXIT_FAILURE;
@@ -79,9 +71,6 @@ int main(int argc, char *argv[]) {
 	/* the number of bytes read from the FIFO */
 	ssize_t read_bytes = 0;
 
-	/* the signal action */
-	struct sigaction signal_action = {{0}};
-
 	/* the process ID */
 	static pid_t pid = 0;
 
@@ -94,8 +83,11 @@ int main(int argc, char *argv[]) {
 	/* the drawing position for the logo text */
 	position_t logo_position = {0, 0};
 
-	/* a boolean which indicates whether this is the first read */
-	bool is_first = TRUE;
+	/* the signal mask */
+	sigset_t signal_mask = {{0}};
+
+	/* the received signal */
+	int received_signal = 0;
 
 	/* if an invalid number of command-line arguments was passed,  show the
 	 * usage message and exit */
@@ -104,23 +96,26 @@ int main(int argc, char *argv[]) {
 		goto end;
 	}
 
+	/* empty the signal mask */
+	if (-1 == sigemptyset(&signal_mask))
+		goto end;
+
+	/* add SIGIO and SIGINT to the signal mask */
+	if ((-1 == sigaddset(&signal_mask, SIGIO)) ||
+	    (-1 == sigaddset(&signal_mask, SIGINT)) ||
+	    (-1 == sigaddset(&signal_mask, SIGTERM)))
+		goto end;
+
+	/* set the signal mask */
+	if (-1 == sigprocmask(SIG_BLOCK, &signal_mask, NULL))
+		goto end;
+
 	/* open the FIFO in non-blocking mode */
 	if (-1 == (fifo = open(argv[1], O_RDONLY | O_NONBLOCK)))
 		goto end;
 
 	/* initialize the drawing area */
 	if (FALSE == drawing_new(&drawing))
-		goto end;
-
-	/* initialize the signal action structure */
-	signal_action.sa_handler = signal_handler;
-
-	/* do not drop signals received while the signal handler is called - this
-	 * way, some data written to the FIFO is lost */
-	signal_action.sa_flags = SA_NODEFER;
-
-	/* register the signal handler */
-	if (0 != sigaction(SIGIO, &signal_action, NULL))
 		goto end;
 
 	/* get the process ID */
@@ -152,21 +147,10 @@ int main(int argc, char *argv[]) {
 	/* set the status text position */
 	status_position.y = drawing.dimensions.height - CONFIG_TEXT_Y;
 
-	/* enter a signal handling loop */
+	/* enter a signal handling loop; do the first iteration without waiting for
+	 * a signal, so any data written to the FIFO before the process was executed
+	 * is handled properly */
 	do {
-		if (FALSE == is_first) {
-			/* wait for a signal to be received and handled by the signal
-			 * handler */
-			(void) pause();
-
-			/* if the received event is not SIGIO, ignore it */
-			if (SIGIO != received_signal)
-				continue;
-		}
-
-		/* perform one initial read before waiting for signals */
-		is_first = FALSE;
-
 		/* read from the FIFO */
 		if (-1 == (read_bytes = read(fifo, &buffer, (BUFFER_SIZE - 1))))
 			break;
@@ -208,6 +192,16 @@ int main(int argc, char *argv[]) {
 
 		/* flush all drawing requests */
 		if (FALSE == drawing_refresh(&drawing))
+			break;
+
+		/* wait for a SIGIO signal to be received */
+		if (0 != sigwait(&signal_mask, &received_signal))
+			break;
+
+		/* if the received signal is either SIGINT or SIGTERM, 
+		 * terminate immediately */
+		if ((SIGINT == received_signal) || 
+		    (SIGTERM == received_signal))
 			break;
 
 	} while (TRUE);
