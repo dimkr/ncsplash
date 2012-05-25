@@ -198,9 +198,9 @@ int main(int argc, char *argv[]) {
 		if (0 != sigwait(&signal_mask, &received_signal))
 			break;
 
-		/* if the received signal is either SIGINT or SIGTERM, 
+		/* if the received signal is either SIGINT or SIGTERM,
 		 * terminate immediately */
-		if ((SIGINT == received_signal) || 
+		if ((SIGINT == received_signal) ||
 		    (SIGTERM == received_signal))
 			break;
 
@@ -209,6 +209,10 @@ int main(int argc, char *argv[]) {
 end:
 	/* destroy the drawing area */
 	(void) drawing_destroy(&drawing);
+
+	/* close the FIFO */
+	if (-1 != fifo)
+		(void) close(fifo);
 
 	return ret;
 }
