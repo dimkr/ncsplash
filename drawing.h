@@ -67,23 +67,25 @@ bool drawing_draw_text(drawing_t *drawing,
                        const char *text,
                        const position_t *position);
 
+/* drawing_draw_text_underlined (bool)
+ * draws underlined text on a drawing area
+ * input: a pointer to a drawing_t structure, the string to draw and the initial
+ *        drawing coordinates
+ * output: TRUE upon success, otherwise FALSE */
+bool drawing_draw_text_underlined(drawing_t *drawing,
+                                  const char *text,
+                                  const position_t *position);
+
 /* drawing_refresh (bool)
  * flushes all drawing requests sent to a drawing area
  * input: a pointer to a drawing_t structure
  * output: TRUE upon success, otherwise FALSE */
 bool drawing_refresh(drawing_t *drawing);
 
-/* drawing_clear (bool)
- * clears a drawing area
- * input: a pointer to a drawing_t structure
+/* drawing_clear_line (bool)
+ * clears a single line of a drawing area
+ * input: a pointer to a drawing_t structure and the line's y coordinate
  * output: TRUE upon success, otherwise FALSE */
-bool drawing_clear(drawing_t *drawing);
-
-/* drawing_set_underlined (bool)
- * makes text drawn to a drawing area underlined or disables this behavior
- * input: a pointer to a drawing_t structure and a boolean which indicates
- *        whether to enable (TRUE) or disable (FALSE) underlined text
- * output: TRUE upon success, otherwise FALSE */
-bool drawing_set_underlined(drawing_t *drawing, bool mode);
+bool drawing_clear_line(drawing_t *drawing, const int y);
 
 #endif

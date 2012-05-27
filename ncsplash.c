@@ -135,8 +135,10 @@ int main(int argc, char *argv[]) {
 						   strnlen(argv[2], MAX_LOGO_LENGTH)) / 2;
 		logo_position.y = drawing.dimensions.height / 2;
 
-
-		if (FALSE == drawing_draw_text(&drawing, argv[2], &logo_position))
+		/* draw the logo text, underlined */
+		if (FALSE == drawing_draw_text_underlined(&drawing,
+		                                          argv[2],
+		                                          &logo_position))
 			goto end;
 
 		/* flush the drawing request */
@@ -170,25 +172,13 @@ int main(int argc, char *argv[]) {
 			}
 		}
 
-		/* clear the drawing */
-		if (FALSE == drawing_clear(&drawing))
+		/* clear the status text line */
+		if (FALSE == drawing_clear_line(&drawing, status_position.y))
 			break;
 
 		/* draw the read text */
 		if (FALSE == drawing_draw_text(&drawing, buffer, &status_position))
 			break;
-
-		/* draw the logo */
-		if ('\0' != *argv[2]) {
-			if (FALSE == drawing_set_underlined(&drawing, TRUE))
-				goto end;
-
-			if (FALSE == drawing_draw_text(&drawing, argv[2], &logo_position))
-				break;
-
-			if (FALSE == drawing_set_underlined(&drawing, FALSE))
-				goto end;
-		}
 
 		/* flush all drawing requests */
 		if (FALSE == drawing_refresh(&drawing))

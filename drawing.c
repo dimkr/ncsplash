@@ -20,6 +20,43 @@
 
 #include "drawing.h"
 
+/*********************
+ * utility functions *
+ *********************/
+
+/* drawing_set_underlined (bool)
+ * makes text drawn to a drawing area underlined or disables this behavior
+ * input: a pointer to a drawing_t structure and a boolean which indicates
+ *        whether to enable (TRUE) or disable (FALSE) underlined text
+ * output: TRUE upon success, otherwise FALSE */
+bool drawing_set_underlined(drawing_t *drawing, const bool mode) {
+	/* the return value */
+	bool ret = FALSE;
+
+	/* do not accept a NULL pointer */
+	if (NULL == drawing)
+		goto end;
+
+	/* set or unset the underlined text flag */
+	if (TRUE == mode) {
+		if (ERR == wattron(drawing->window, A_UNDERLINE))
+			goto end;
+	} else {
+		if (ERR == wattroff(drawing->window, A_UNDERLINE))
+			goto end;
+	}
+
+	/* report success */
+	ret = TRUE;
+
+end:
+	return ret;
+}
+
+/******************
+ * implementation *
+ ******************/
+
 bool drawing_new(drawing_t *drawing) {
 	/* the return value */
 	bool ret = FALSE;
@@ -102,7 +139,33 @@ end:
 	return ret;
 }
 
-bool drawing_clear(drawing_t *drawing) {
+
+bool drawing_draw_text_underlined(drawing_t *drawing,
+                                  const char *text,
+                                  const position_t *position) {
+	/* the return value */
+	bool ret = FALSE;
+
+	/* make text underlined */
+	if (FALSE == drawing_set_underlined(drawing, TRUE))
+		goto end;
+
+	/* draw the text */
+	if (FALSE == drawing_draw_text(drawing, text, position))
+		goto end;
+
+	/* disable underlined text */
+	if (FALSE == drawing_set_underlined(drawing, FALSE))
+		goto end;
+
+	/* report success */
+	ret = TRUE;
+
+end:
+	return ret;
+}
+
+bool drawing_clear_line(drawing_t *drawing, const int y) {
 	/* the return value */
 	bool ret = FALSE;
 
@@ -110,8 +173,12 @@ bool drawing_clear(drawing_t *drawing) {
 	if (NULL == drawing)
 		goto end;
 
+	/* move to the line's beginning */
+	if (ERR == wmove(drawing->window, y, 0))
+		goto end;
+
 	/* erase the line */
-	if (ERR == werase(drawing->window))
+	if (ERR == wclrtoeol(drawing->window))
 		goto end;
 
 	/* report success */
@@ -132,30 +199,6 @@ bool drawing_refresh(drawing_t *drawing) {
 	/* flush all drawing requests */
 	if (ERR == wrefresh(drawing->window))
 		goto end;
-
-	/* report success */
-	ret = TRUE;
-
-end:
-	return ret;
-}
-
-bool drawing_set_underlined(drawing_t *drawing, bool mode) {
-	/* the return value */
-	bool ret = FALSE;
-
-	/* do not accept a NULL pointer */
-	if (NULL == drawing)
-		goto end;
-
-	/* set or unset the underlined text flag */
-	if (TRUE == mode) {
-		if (ERR == wattron(drawing->window, A_UNDERLINE))
-			goto end;
-	} else {
-		if (ERR == wattroff(drawing->window, A_UNDERLINE))
-			goto end;
-	}
 
 	/* report success */
 	ret = TRUE;
